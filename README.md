@@ -48,7 +48,6 @@ A modern and upgraded Tic Tac Toe game built using **Python + Tkinter**, featuri
 │── tictactoe_networked.py   # Main executable
 │── README.md
 │── LICENSE (MIT)
-│── /assets (optional future expansion)
 ```
 
 ---
