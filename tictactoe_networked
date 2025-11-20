@@ -1,0 +1,765 @@
+# tictactoe_networked.py
+
+
+
+"""
+Tic-Tac-Toe (Tkinter)
+made by Srinjoy Das - Fixed and enhanced version
+Features:both single player and multiplayer (local and LAN) modes,
+looks visually appealing with neon effects, uses minimax for AI,
+and has a clean, user-friendly interface.
+
+license: MIT
+
+MIT License
+Copyright (c) 2025 SRINJOY DAS 
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE
+"""
+
+
+import tkinter as tk
+from tkinter import simpledialog
+import threading, socket, random, copy, time
+
+# --- Constants ---
+BG = "#070616"
+PANEL_ALPHA = 0.12
+NEON_X = "#1cd8ff"
+NEON_O = "#ff4d6d"
+NEON_ACCENT = "#7c5cff"
+TEXT_FAINT = "#C8D0E0"
+DEFAULT_PORT = 5000
+PORT_MIN, PORT_MAX = 1024, 65535
+
+EMPTY = " "
+HUMAN = "X"
+AI = "O"
+
+# --- Helpers for rounded rectangles on Canvas (approx) ---
+def round_rect(canvas, x1, y1, x2, y2, r=16, **kwargs):
+    """Draw a rounded rectangle (approximation) and return created IDs."""
+    ids = []
+    # center rectangle
+    ids.append(canvas.create_rectangle(x1+r, y1, x2-r, y2, **kwargs))
+    ids.append(canvas.create_rectangle(x1, y1+r, x2, y2-r, **kwargs))
+    # corners as arcs
+    ids.append(canvas.create_arc(x2-2*r, y1, x2, y1+2*r, start=0, extent=90, style="pieslice", **kwargs))
+    ids.append(canvas.create_arc(x2-2*r, y2-2*r, x2, y2, start=270, extent=90, style="pieslice", **kwargs))
+    ids.append(canvas.create_arc(x1, y2-2*r, x1+2*r, y2, start=180, extent=90, style="pieslice", **kwargs))
+    ids.append(canvas.create_arc(x1, y1, x1+2*r, y1+2*r, start=90, extent=90, style="pieslice", **kwargs))
+    return ids
+
+# --- Minimax (Impossible AI) ---
+def check_winner_static(board):
+    for i in range(3):
+        if board[i][0] == board[i][1] == board[i][2] != EMPTY: return board[i][0]
+        if board[0][i] == board[1][i] == board[2][i] != EMPTY: return board[0][i]
+    if board[0][0] == board[1][1] == board[2][2] != EMPTY: return board[0][0]
+    if board[0][2] == board[1][1] == board[2][0] != EMPTY: return board[0][2]
+    if all(board[r][c] != EMPTY for r in range(3) for c in range(3)): return "Tie"
+    return None
+
+def minimax(board, depth, is_max):
+    winner = check_winner_static(board)
+    if winner == AI: return 10 - depth, None
+    if winner == HUMAN: return depth - 10, None
+    if winner == "Tie": return 0, None
+    if is_max:
+        best = -9999; mv = None
+        for r in range(3):
+            for c in range(3):
+                if board[r][c] == EMPTY:
+                    board[r][c] = AI
+                    val, _ = minimax(board, depth+1, False)
+                    board[r][c] = EMPTY
+                    if val > best:
+                        best = val; mv = (r,c)
+        return best, mv
+    else:
+        best = 9999; mv = None
+        for r in range(3):
+            for c in range(3):
+                if board[r][c] == EMPTY:
+                    board[r][c] = HUMAN
+                    val, _ = minimax(board, depth+1, True)
+                    board[r][c] = EMPTY
+                    if val < best:
+                        best = val; mv = (r,c)
+        return best, mv
+
+# --- Simple Network Handler (background threads) ---
+class SimpleNet:
+    def __init__(self):
+        self.sock = None
+        self.conn = None
+        self.running = False
+        self.on_message = None  # callable(str)
+        self.lock = threading.Lock()
+
+    def start_host(self, port):
+        self.stop()
+        t = threading.Thread(target=self._host_thread, args=(port,), daemon=True)
+        t.start()
+
+    def _host_thread(self, port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("", port))
+            s.listen(1)
+            self.sock = s
+            conn, addr = s.accept()
+            with self.lock:
+                self.conn = conn
+                self.running = True
+            self._listen_loop(conn)
+        except Exception as e:
+            # print("Host error:", e)
+            self.stop()
+
+    def connect(self, host, port):
+        self.stop()
+        t = threading.Thread(target=self._client_thread, args=(host,port), daemon=True)
+        t.start()
+
+    def _client_thread(self, host, port):
+        try:
+            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.settimeout(8)
+            conn.connect((host, port))
+            conn.settimeout(None)
+            with self.lock:
+                self.conn = conn
+                self.running = True
+            self._listen_loop(conn)
+        except Exception as e:
+            # print("Client error:", e)
+            self.stop()
+
+    def _listen_loop(self, conn):
+        try:
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    break
+                for line in data.decode().splitlines():
+                    if self.on_message:
+                        self.on_message(line.strip())
+        except:
+            pass
+        finally:
+            self.stop()
+
+    def send(self, txt):
+        with self.lock:
+            if not self.conn: return False
+            try:
+                self.conn.sendall((txt + "\n").encode())
+                return True
+            except:
+                self.stop()
+                return False
+
+    def stop(self):
+        with self.lock:
+            try:
+                if self.conn:
+                    self.conn.close()
+            except: pass
+            try:
+                if self.sock:
+                    self.sock.close()
+            except: pass
+            self.conn = None; self.sock = None; self.running = False
+
+# --- Main App ---
+class TicTacToeApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Tic Tac Toe — Fixed Tkinter")
+        self.root.configure(bg=BG)
+        self.root.geometry("920x680")
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # single container frame (we'll place widgets on canvas to avoid pack/grid mixing)
+        self.canvas = tk.Canvas(root, bg=BG, highlightthickness=0)
+        self.canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        # state
+        self.screen_items = []    # ids on canvas and widget refs to remove when switching screens
+        self.widget_refs = {}
+        self.board = [[EMPTY]*3 for _ in range(3)]
+        self.cell_sym_ids = {}    # map (r,c) -> list of canvas ids for symbol & glows
+        self.cell_rects = {}      # map (r,c) -> coords for cell
+        self.score = {"Player":0, "AI":0, "Opponent":0, "Ties":0}
+
+        self.net = SimpleNet()
+        self.net.on_message = self.on_net_message
+        self.play_mode = "Single"  # Single, Local2, LANHost, LANClient
+        self.lan_symbol = None
+        self.network_connected = False
+
+        # UI prefs
+        self.difficulty = "Impossible"
+        self.starter = "Player"  # Player or AI
+        self.host_port_str = str(DEFAULT_PORT)
+
+        # animation flags
+        self.animating = False
+
+        # draw home
+        self.show_home()
+
+    # ---------- screen helpers ----------
+    def clear_screen(self):
+        # delete canvas items
+        for item in list(self.screen_items):
+            try:
+                if isinstance(item, tk.Widget):
+                    item.destroy()
+                else:
+                    self.canvas.delete(item)
+            except:
+                pass
+        self.screen_items.clear()
+        # destroy widget refs
+        for k,w in list(self.widget_refs.items()):
+            try:
+                w.destroy()
+            except: pass
+        self.widget_refs.clear()
+
+    def add_canvas_text(self, x, y, txt, size=28, color=NEON_ACCENT):
+        idd = self.canvas.create_text(x,y, text=txt, fill=color, font=("Helvetica", size, "bold"))
+        self.screen_items.append(idd)
+        return idd
+
+    def add_widget(self, widget, x, y):
+        # places a tkinter widget on canvas using create_window and tracks it
+        win = self.canvas.create_window(x, y, window=widget)
+        self.screen_items.append(win)
+        self.widget_refs[widget] = widget
+        return win
+
+    # ---------- HOME ----------
+    def show_home(self):
+        self.clear_screen()
+        self.add_canvas_text(460, 80, "TIC TAC TOE", size=44, color=NEON_X)
+        # central panel (decorative)
+        panel_ids = round_rect(self.canvas, 120, 130, 800, 520, r=20, fill=NEON_ACCENT, outline=NEON_ACCENT)
+        # make panel translucent by setting fill as bg-like; simpler is to draw a rectangle with low alpha using label backcolor
+        for pid in panel_ids: 
+            try: self.canvas.itemconfig(pid, fill=self._blend(NEON_ACCENT, 0.03), outline=self._blend(NEON_ACCENT, 0.06))
+            except: pass
+            self.screen_items.append(pid)
+
+        # Buttons: use only place() through Tk widgets and add them to canvas
+        pvc_btn = tk.Label(self.root, text="Player vs Computer", bg=BG, fg=NEON_X, font=("Helvetica", 16, "bold"), bd=0)
+        pvc_btn.bind("<Enter>", lambda e: pvc_btn.config(font=("Helvetica",18,"bold")))
+        pvc_btn.bind("<Leave>", lambda e: pvc_btn.config(font=("Helvetica",16,"bold")))
+        pvc_btn.bind("<Button-1>", lambda e: self.show_pvc())
+        self.add_widget(pvc_btn, 460, 230)
+
+        pvp_btn = tk.Label(self.root, text="Player vs Player", bg=BG, fg=NEON_O, font=("Helvetica", 16, "bold"), bd=0)
+        pvp_btn.bind("<Enter>", lambda e: pvp_btn.config(font=("Helvetica",18,"bold")))
+        pvp_btn.bind("<Leave>", lambda e: pvp_btn.config(font=("Helvetica",16,"bold")))
+        pvp_btn.bind("<Button-1>", lambda e: self.show_pvp())
+        self.add_widget(pvp_btn, 460, 320)
+
+        hint = tk.Label(self.root, text="Retro neon arcade — choose a mode", bg=BG, fg=TEXT_FAINT, font=("Helvetica", 10))
+        self.add_widget(hint, 460, 380)
+
+    # ---------- PVC ----------
+    def show_pvc(self):
+        self.clear_screen()
+        self.add_canvas_text(460, 60, "PLAYER vs COMPUTER", size=28, color=NEON_X)
+
+        panel_ids = round_rect(self.canvas, 90, 110, 830, 520, r=18, fill=self._blend("#FFFFFF", 0.03), outline=self._blend(NEON_ACCENT, 0.05))
+        for pid in panel_ids: self.screen_items.append(pid)
+
+        # Difficulty chips
+        options = ["Easy","Medium","Hard","Impossible"]
+        x0 = 220
+        for i,opt in enumerate(options):
+            col = NEON_X if opt!="Impossible" else "white"
+            lbl = tk.Label(self.root, text=opt, bg=BG, fg=col, font=("Helvetica", 12), bd=0, padx=18, pady=8)
+            lbl.bind("<Button-1>", lambda e, o=opt: self.set_difficulty(o))
+            lbl.bind("<Enter>", lambda e, w=lbl: w.config(font=("Helvetica",13,"bold")))
+            lbl.bind("<Leave>", lambda e, w=lbl: w.config(font=("Helvetica",12)))
+            self.add_widget(lbl, x0 + i*180, 200)
+            # mark selected visually
+            if opt == self.difficulty:
+                lbl.config(relief="solid", bd=1)
+
+        # Starter choice
+        sp = tk.Label(self.root, text="Who starts?", bg=BG, fg=TEXT_FAINT, font=("Helvetica", 11))
+        self.add_widget(sp, 460, 260)
+        start_p = tk.Label(self.root, text="Player (X)", bg=BG, fg=TEXT_FAINT, font=("Helvetica", 12))
+        start_p.bind("<Button-1>", lambda e: self.set_starter("Player"))
+        self.add_widget(start_p, 380, 300)
+        start_a = tk.Label(self.root, text="Computer (O)", bg=BG, fg=TEXT_FAINT, font=("Helvetica", 12))
+        start_a.bind("<Button-1>", lambda e: self.set_starter("AI"))
+        self.add_widget(start_a, 540, 300)
+
+        # Start & Back
+        start_btn = tk.Label(self.root, text="Start Game", bg=NEON_ACCENT, fg="#021", font=("Helvetica", 13, "bold"), padx=12, pady=8)
+        start_btn.bind("<Button-1>", lambda e: self.start_game("Single"))
+        self.add_widget(start_btn, 360, 380)
+
+        back_btn = tk.Label(self.root, text="Back", bg=BG, fg=TEXT_FAINT, font=("Helvetica", 12))
+        back_btn.bind("<Button-1>", lambda e: self.show_home())
+        self.add_widget(back_btn, 560, 380)
+
+    def set_difficulty(self, d):
+        self.difficulty = d
+        # refresh PVC screen so selection visible
+        self.show_pvc()
+
+    def set_starter(self, s):
+        self.starter = s
+
+    # ---------- PVP ----------
+    def show_pvp(self):
+        self.clear_screen()
+        self.add_canvas_text(460, 60, "PLAYER vs PLAYER", size=28, color=NEON_O)
+        panel_ids = round_rect(self.canvas, 90, 110, 830, 520, r=18, fill=self._blend("#FFFFFF", 0.03), outline=self._blend(NEON_O, 0.05))
+        for pid in panel_ids: self.screen_items.append(pid)
+
+        host_btn = tk.Label(self.root, text="Host (LAN)", bg=BG, fg=NEON_X, font=("Helvetica", 14))
+        host_btn.bind("<Button-1>", lambda e: self.show_host_panel())
+        self.add_widget(host_btn, 360, 240)
+
+        join_btn = tk.Label(self.root, text="Join (LAN)", bg=BG, fg=NEON_O, font=("Helvetica", 14))
+        join_btn.bind("<Button-1>", lambda e: self.join_prompt())
+        self.add_widget(join_btn, 560, 240)
+
+        local_btn = tk.Label(self.root, text="Local 2-Player (same device)", bg=BG, fg=TEXT_FAINT, font=("Helvetica", 12))
+        local_btn.bind("<Button-1>", lambda e: (self.start_game("Local2")))
+        self.add_widget(local_btn, 460, 320)
+
+        back_btn = tk.Label(self.root, text="Back", bg=BG, fg=TEXT_FAINT, font=("Helvetica", 12))
+        back_btn.bind("<Button-1>", lambda e: self.show_home())
+        self.add_widget(back_btn, 460, 420)
+
+    def show_host_panel(self):
+        # inline port panel appears (toggle)
+        if "host_panel" in self.widget_refs:
+            # remove it
+            self.widget_refs["host_panel"].destroy()
+            del self.widget_refs["host_panel"]
+            self.show_pvp()  # redraw to refresh
+            return
+
+        frame = tk.Frame(self.root, bg=BG)
+        lbl = tk.Label(frame, text="Enter Port:", bg=BG, fg=TEXT_FAINT)
+        ent = tk.Entry(frame, width=8)
+        ent.insert(0, self.host_port_str)
+        start = tk.Button(frame, text="Start Hosting", bg=NEON_X, fg="#012", command=lambda: self.start_host(ent.get()))
+        lbl.grid(row=0, column=0, padx=4)
+        ent.grid(row=0, column=1, padx=6)
+        start.grid(row=0, column=2, padx=6)
+        self.widget_refs["host_panel"] = frame
+        self.add_widget(frame, 460, 360)
+
+    def start_host(self, port_str):
+        try:
+            p = int(port_str)
+            if p < PORT_MIN or p > PORT_MAX:
+                p = DEFAULT_PORT
+        except:
+            p = DEFAULT_PORT
+        self.host_port_str = str(p)
+        # start host in background
+        self.net.start_host(p)
+        # show waiting panel
+        self.clear_screen()
+        self.add_canvas_text(460, 120, f"Hosting on port {p}", size=22, color=NEON_X)
+        info = tk.Label(self.root, text="Waiting for opponent to connect...", bg=BG, fg=TEXT_FAINT)
+        self.add_widget(info, 460, 180)
+        cancel = tk.Button(self.root, text="Cancel", command=self.cancel_host)
+        self.add_widget(cancel, 460, 260)
+        # start a poll thread to detect connection (non-blocking UI)
+        t = threading.Thread(target=self._wait_for_conn_thread, daemon=True)
+        t.start()
+
+    def _wait_for_conn_thread(self):
+        # wait until net.conn is not None or net stops
+        while True:
+            time.sleep(0.25)
+            if self.net.conn:
+                # connected -> set LAN host mode and start game on main thread
+                self.play_mode = "LANHost"
+                self.lan_symbol = "X"
+                self.network_connected = True
+                self.root.after(50, lambda: self.start_game("LANHost"))
+                return
+            if not (self.net.sock or self.net.conn):
+                # something failed -> go back
+                self.root.after(50, lambda: self.show_pvp())
+                return
+
+    def cancel_host(self):
+        self.net.stop()
+        self.show_pvp()
+
+    def join_prompt(self):
+        # simple dialog to ask for IP & port
+        ip = simpledialog.askstring("Join Host", "Enter Host IP (e.g. 192.168.1.10)", parent=self.root)
+        if not ip: return
+        port_s = simpledialog.askstring("Join Host", f"Enter port (default {DEFAULT_PORT})", parent=self.root)
+        try:
+            port = int(port_s) if port_s else DEFAULT_PORT
+        except:
+            port = DEFAULT_PORT
+        # start connect in background
+        self.net.connect(ip, port)
+        # show connecting
+        self.clear_screen()
+        self.add_canvas_text(460, 140, f"Connecting to {ip}:{port}", size=20, color=NEON_O)
+        cancel = tk.Button(self.root, text="Cancel", command=lambda: (self.net.stop(), self.show_pvp()))
+        self.add_widget(cancel, 460, 240)
+        # spin-wait for connection in background
+        t = threading.Thread(target=self._wait_for_client_conn, daemon=True)
+        t.start()
+
+    def _wait_for_client_conn(self):
+        # wait until connection attached
+        for _ in range(60):
+            time.sleep(0.2)
+            if self.net.conn:
+                self.play_mode = "LANClient"
+                self.lan_symbol = "O"
+                self.network_connected = True
+                self.root.after(50, lambda: self.start_game("LANClient"))
+                return
+        # failed
+        self.root.after(50, lambda: self.show_pvp())
+
+    # ---------- Start Game ----------
+    def start_game(self, mode="Single"):
+        # mode: Single, Local2, LANHost, LANClient
+        self.clear_screen()
+        self.board = [[EMPTY]*3 for _ in range(3)]
+        self.cell_sym_ids.clear()
+        self.play_mode = mode if mode != "Single" else "Single"
+        # draw board grid on canvas and compute cell rects
+        left, top = 160, 120
+        size = 420
+        cell = size // 3
+        # decorative panel
+        panel_ids = round_rect(self.canvas, left-16, top-16, left+size+16, top+size+16, r=20, fill=self._blend("#FFFFFF", 0.02), outline=self._blend(NEON_ACCENT, 0.04))
+        for pid in panel_ids: self.screen_items.append(pid)
+        # grid cells
+        self.canvas.update()
+        for r in range(3):
+            for c in range(3):
+                x1 = left + c*cell; y1 = top + r*cell
+                x2 = x1 + cell; y2 = y1 + cell
+                rect_id = self.canvas.create_rectangle(x1, y1, x2, y2, fill=self._blend("#000000", 0.02), outline=self._blend(NEON_ACCENT, 0.04), width=2)
+                self.screen_items.append(rect_id)
+                self.cell_rects[(r,c)] = (x1,y1,x2,y2)
+                # transparent binding area; canvas rectangle has tag
+                tag = f"cell_{r}_{c}"
+                self.canvas.tag_bind(rect_id, "<Button-1>", lambda e, rr=r, cc=c: self.on_cell_click(rr, cc))
+
+        # status label & scoreboard
+        self.status_label = tk.Label(self.root, text="Starting...", bg=BG, fg=TEXT_FAINT, font=("Helvetica", 12))
+        self.add_widget(self.status_label, 460, 60)
+        self.update_scoreboard()
+
+        # rematch & main menu buttons (disabled until end)
+        self.rematch_btn = tk.Button(self.root, text="Rematch", state="disabled", command=self.rematch)
+        self.mainmenu_btn = tk.Button(self.root, text="Main Menu", command=self.goto_main_menu)
+        self.add_widget(self.rematch_btn, 600, 560)
+        self.add_widget(self.mainmenu_btn, 740, 560)
+
+        # set starting player
+        if self.play_mode == "Single":
+            if self.starter == "Player":
+                self.current_player = "Player"; self.set_status("Your turn.")
+            else:
+                self.current_player = "AI"; self.set_status("AI thinking...")
+                self.root.after(450, lambda: self.ai_move_with_anim())
+        elif self.play_mode == "Local2":
+            self.current_player = "PlayerX" if self.starter=="Player" else "PlayerO"
+            self.set_status("Player X's turn." if self.current_player=="PlayerX" else "Player O's turn.")
+        elif self.play_mode == "LANHost":
+            # host is X and moves first
+            self.current_player = "Player"
+            self.set_status("Your turn. (You are X)")
+        elif self.play_mode == "LANClient":
+            # client is O; opponent (host) moves first
+            self.current_player = "Opponent"
+            self.set_status("Waiting for opponent...")
+
+    # ---------- UI helpers ----------
+    def _blend(self, hexcol, alpha):
+        # simple blend with BG to simulate translucency; hexcol like "#rrggbb"
+        hexcol = hexcol.lstrip("#")
+        r = int(hexcol[0:2],16); g = int(hexcol[2:4],16); b = int(hexcol[4:6],16)
+        bg_rgb = (7,6,22)
+        r2 = int(bg_rgb[0] + (r - bg_rgb[0]) * alpha)
+        g2 = int(bg_rgb[1] + (g - bg_rgb[1]) * alpha)
+        b2 = int(bg_rgb[2] + (b - bg_rgb[2]) * alpha)
+        return f"#{r2:02x}{g2:02x}{b2:02x}"
+
+    def set_status(self, txt):
+        try:
+            self.status_label.config(text=txt)
+        except:
+            pass
+
+    def update_scoreboard(self):
+        # draw scoreboard on right: simple labels
+        # remove old scoreboard widgets if any
+        for key in ("p_label","a_label","o_label","t_label"):
+            if key in self.widget_refs:
+                try:
+                    self.widget_refs[key].destroy()
+                    del self.widget_refs[key]
+                except: pass
+        p_lbl = tk.Label(self.root, text=f"Player: {self.score['Player']}", bg=BG, fg=TEXT_FAINT)
+        a_lbl = tk.Label(self.root, text=f"AI: {self.score['AI']}", bg=BG, fg=TEXT_FAINT)
+        o_lbl = tk.Label(self.root, text=f"Opponent: {self.score['Opponent']}", bg=BG, fg=TEXT_FAINT)
+        t_lbl = tk.Label(self.root, text=f"Ties: {self.score['Ties']}", bg=BG, fg=TEXT_FAINT)
+        self.add_widget(p_lbl, 760, 140); self.widget_refs["p_label"]=p_lbl
+        self.add_widget(a_lbl, 760, 180); self.widget_refs["a_label"]=a_lbl
+        self.add_widget(o_lbl, 760, 220); self.widget_refs["o_label"]=o_lbl
+        self.add_widget(t_lbl, 760, 260); self.widget_refs["t_label"]=t_lbl
+
+    # ---------- Move handlers ----------
+    def on_cell_click(self, r, c):
+        if self.board[r][c] != EMPTY:
+            return
+        if self.play_mode == "Single":
+            if self.current_player != "Player": return
+            self.board[r][c] = HUMAN
+            self.draw_symbol_with_anim(r,c,HUMAN)
+            w = check_winner_static(self.board)
+            if w:
+                self.process_end(w); return
+            # AI turn
+            self.current_player = "AI"
+            self.set_status("AI thinking...")
+            self.root.after(300, lambda: self.ai_move_with_anim())
+        elif self.play_mode == "Local2":
+            if self.current_player == "PlayerX":
+                self.board[r][c] = "X"
+                self.draw_symbol_with_anim(r,c,"X")
+                w = check_winner_static(self.board)
+                if w:
+                    self.process_end(w); return
+                self.current_player = "PlayerO"; self.set_status("Player O's turn.")
+            else:
+                self.board[r][c] = "O"
+                self.draw_symbol_with_anim(r,c,"O")
+                w = check_winner_static(self.board)
+                if w:
+                    self.process_end(w); return
+                self.current_player = "PlayerX"; self.set_status("Player X's turn.")
+        elif self.play_mode in ("LANHost","LANClient"):
+            if self.current_player != "Player": return
+            our_sym = self.lan_symbol
+            self.board[r][c] = our_sym
+            self.draw_symbol_with_anim(r,c,our_sym)
+            # send move to peer
+            if self.net.conn:
+                self.net.send(f"MOVE {r} {c}")
+            w = check_winner_static(self.board)
+            if w:
+                self.process_end(w); return
+            self.current_player = "Opponent"
+            self.set_status("Waiting for opponent...")
+
+    def draw_symbol_with_anim(self, r, c, sym):
+        # Remove any previous symbol at cell (shouldn't exist) and draw glow layers + main symbol
+        # Track all created ids for that cell to allow full deletion on reset
+        # compute centre coords
+        x1,y1,x2,y2 = self.cell_rects[(r,c)]
+        cx = (x1+x2)//2; cy = (y1+y2)//2
+        ids = []
+        # glow rings: several ovals with decreasing alpha (simulate via blended color)
+        color = NEON_X if sym == "X" else NEON_O
+        for i,rad in enumerate((36,28,18)):
+            col = self._blend(color, 0.12 * (3-i))
+            oval = self.canvas.create_oval(cx-rad, cy-rad, cx+rad, cy+rad, outline=col, width=2)
+            ids.append(oval)
+        # main text
+        txt_id = self.canvas.create_text(cx, cy, text=sym, fill=color, font=("Helvetica", 36, "bold"))
+        ids.append(txt_id)
+        self.cell_sym_ids[(r,c)] = ids
+
+    # ---------- AI ----------
+    def ai_move_with_anim(self):
+        # choose move based on difficulty, then draw with a short 'pulse' (we simplified)
+        mv = self.choose_ai_move()
+        if not mv:
+            return
+        r,c = mv
+        # small visual delay then place
+        self.root.after(200, lambda: (self.place_ai_move(r,c)))
+
+    def place_ai_move(self, r, c):
+        self.board[r][c] = AI
+        self.draw_symbol_with_anim(r,c,AI)
+        w = check_winner_static(self.board)
+        if w:
+            self.process_end(w); return
+        self.current_player = "Player"
+        self.set_status("Your turn.")
+
+    def choose_ai_move(self):
+        empty = [(r,c) for r in range(3) for c in range(3) if self.board[r][c]==EMPTY]
+        if not empty: return None
+        d = self.difficulty
+        if d == "Easy":
+            return random.choice(empty)
+        if d == "Medium":
+            if random.random() < 0.5:
+                return random.choice(empty)
+            _, mv = minimax(copy.deepcopy(self.board), 0, True)
+            return mv or random.choice(empty)
+        if d == "Hard":
+            if random.random() < 0.18:
+                return random.choice(empty)
+            _, mv = minimax(copy.deepcopy(self.board), 0, True)
+            return mv or random.choice(empty)
+        _, mv = minimax(copy.deepcopy(self.board), 0, True)
+        return mv or random.choice(empty)
+
+    # ---------- End & Rematch ----------
+    def process_end(self, winner):
+        if winner == "Tie":
+            self.set_status("It's a tie!")
+            self.score["Ties"] += 1
+        else:
+            if self.play_mode == "Single":
+                if winner == HUMAN:
+                    self.set_status("You (X) win!"); self.score["Player"] += 1
+                else:
+                    self.set_status("AI (O) wins!"); self.score["AI"] += 1
+            elif self.play_mode == "Local2":
+                if winner == "X":
+                    self.set_status("Player X wins!"); self.score["Player"] += 1
+                else:
+                    self.set_status("Player O wins!"); self.score["Opponent"] += 1
+            elif self.play_mode in ("LANHost","LANClient"):
+                if winner == self.lan_symbol:
+                    self.set_status("You win!"); self.score["Player"] += 1
+                else:
+                    self.set_status("Opponent wins!"); self.score["Opponent"] += 1
+            else:
+                self.set_status(f"{winner} wins!")
+        # disable further clicks by setting current_player
+        self.current_player = "Finished"
+        # enable rematch
+        try:
+            self.rematch_btn.config(state="normal")
+            self.update_scoreboard()
+        except:
+            pass
+
+    def rematch(self):
+        # send RESET in LAN
+        if self.play_mode in ("LANHost","LANClient") and self.net.conn:
+            try:
+                self.net.send("RESET")
+            except: pass
+        self.reset_board_for_rematch()
+
+    def reset_board_for_rematch(self):
+        # remove all symbol canvas items (glow + text) completely
+        for (r,c), ids in list(self.cell_sym_ids.items()):
+            for iid in ids:
+                try: self.canvas.delete(iid)
+                except: pass
+        self.cell_sym_ids.clear()
+        # reset board state
+        self.board = [[EMPTY]*3 for _ in range(3)]
+        self.winner = None
+        self.rematch_btn.config(state="disabled")
+        # set starter depending on mode
+        if self.play_mode == "Single":
+            if self.starter == "Player":
+                self.current_player = "Player"; self.set_status("Your turn.")
+            else:
+                self.current_player = "AI"; self.set_status("AI thinking..."); self.root.after(400, lambda: self.ai_move_with_anim())
+        elif self.play_mode == "Local2":
+            self.current_player = "PlayerX" if self.starter=="Player" else "PlayerO"
+            self.set_status("Player X's turn." if self.current_player=="PlayerX" else "Player O's turn.")
+        elif self.play_mode in ("LANHost","LANClient"):
+            # X always starts
+            if self.lan_symbol == "X":
+                self.current_player = "Player"; self.set_status("Your turn.")
+            else:
+                self.current_player = "Opponent"; self.set_status("Waiting for opponent...")
+
+    def goto_main_menu(self):
+        # for LAN: inform peer and stop
+        if self.play_mode in ("LANHost","LANClient") and self.net.conn:
+            try:
+                self.net.send("EXIT")
+            except: pass
+            self.net.stop()
+        self.play_mode = "Single"
+        self.network_connected = False
+        self.show_home()
+
+    # ---------- Network message handler ----------
+    def on_net_message(self, txt):
+        # messages: MOVE r c ; RESET ; EXIT
+        parts = txt.split()
+        if not parts: return
+        cmd = parts[0]
+        if cmd == "MOVE" and len(parts) == 3:
+            try:
+                r = int(parts[1]); c = int(parts[2])
+            except:
+                return
+            # opponent symbol depends on our lan_symbol
+            opponent_sym = "O" if self.lan_symbol == "X" else "X"
+            # apply move on main thread
+            self.root.after(10, lambda: self.apply_network_move(r, c, opponent_sym))
+        elif cmd == "RESET":
+            self.root.after(10, lambda: self.reset_board_for_rematch())
+        elif cmd == "EXIT":
+            # remote left
+            self.root.after(10, lambda: (self.net.stop(), self.show_home()))
+
+    def apply_network_move(self, r, c, sym):
+        if self.board[r][c] != EMPTY: return
+        self.board[r][c] = sym
+        self.draw_symbol_with_anim(r,c,sym)
+        w = check_winner_static(self.board)
+        if w:
+            self.process_end(w)
+        else:
+            self.current_player = "Player"
+            self.set_status("Your turn.")
+
+    # ---------- Cleanup ----------
+    def on_close(self):
+        try:
+            if self.net: self.net.stop()
+        except: pass
+        self.root.destroy()
+
+# ---------- Run ----------
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TicTacToeApp(root)
+    root.mainloop()
