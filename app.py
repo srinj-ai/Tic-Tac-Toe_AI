@@ -212,6 +212,7 @@ def ai_pick_move():
 # ---------------- UI HEADER ----------------
 st.markdown("<div class='title'>TIC TAC TOE</div>", unsafe_allow_html=True)
 st.markdown("Play Tic Tac Toe against an AI or a friend!")
+st.markdown("Please turn on dextop mode for better experence in mobiles and tablet!! ")
 
 # ---------------- Game Settings ----------------
 mode = st.selectbox("Mode", ["Player vs AI", "Player vs Player"])
