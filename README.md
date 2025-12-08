@@ -45,9 +45,10 @@ A modern and upgraded Tic Tac Toe game built using **Python + Tkinter**, featuri
 
 ```
 📁 Tic-Tac-Toe-AI-Bot
-│── tictactoe_networked.py   # Main executable
 │── README.md
 │── LICENSE (MIT)
+│── app.py            # Main executable
+│── requirements.txt 
 ```
 
 ---
@@ -59,11 +60,18 @@ Make sure Python is installed.
 Run the game using:
 
 ```
-app.py
+streamlit run app.py
 ```
 
 That's it!
 
+or
+
+go link 
+
+'''
+https://tic-tac-toe-ai-srinjoy.streamlit.app/
+'''
 ---
 
 ## 🛠️ Tech Stack
