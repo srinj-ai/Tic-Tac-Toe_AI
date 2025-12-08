@@ -1,28 +1,3 @@
-"""
-
-MIT License
-
-Copyright (c) 2025 SRINJOY DAS 
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-"""
 
 import streamlit as st
 import random
@@ -41,7 +16,7 @@ AI = "O"
 
 st.set_page_config(page_title="Tic Tac Toe", layout="centered")
 
-# ---------------- CSS NEON UI ----------------
+# ---------------- RESPONSIVE CSS ----------------
 st.markdown(f"""
 <style>
 html, body, .stApp {{
@@ -104,10 +79,42 @@ html, body, .stApp {{
     font-weight: 600;
     margin-bottom: 15px;
 }}
+
+/* ---------- MOBILE RESPONSIVE ---------- */
+@media (max-width: 600px) {{
+    .title {{
+        font-size: 30px;
+    }}
+
+    .cell {{
+        height: 80px;
+        font-size: 36px;
+        border-radius: 10px;
+    }}
+
+    .scoreboard {{
+        font-size: 16px;
+    }}
+
+    .resetbutton .stButton>button {{
+        padding: 8px 15px;
+        font-size: 14px;
+    }}
+
+    .stSelectbox label {{
+        font-size: 15px !important;
+    }}
+}}
+
+/* EXTRA SMALL DEVICES (very small phones) */
+@media (max-width: 380px) {{
+    .cell {{
+        height: 65px;
+        font-size: 30px;
+    }}
+}}
 </style>
 """, unsafe_allow_html=True)
-
-
 
 # ---------------- SESSION STATE ----------------
 if "board" not in st.session_state:
@@ -123,7 +130,7 @@ if "first_move" not in st.session_state:
 if "score" not in st.session_state:
     st.session_state.score = {"Human":0, "AI":0, "Tie":0}
 
-# ----------------- Winner check ----------------
+# ---------------- Winner check ----------------
 def check_winner(board):
     for i in range(3):
         if board[i][0]==board[i][1]==board[i][2]!=EMPTY:
@@ -138,7 +145,7 @@ def check_winner(board):
         return "Tie"
     return None
 
-# ----------------- Minimax AI ----------------
+# ---------------- Minimax AI ----------------
 def minimax(board, depth, is_max):
     winner = check_winner(board)
     if winner == AI: return 10 - depth, None
@@ -178,10 +185,11 @@ def ai_pick_move():
     _, mv = minimax([row[:] for row in board], 0, True)
     return mv or random.choice(empty)
 
-# ----------------- UI HEADER ----------------
+# ---------------- UI HEADER ----------------
 st.markdown("<div class='title'>TIC TAC TOE</div>", unsafe_allow_html=True)
-st.markdown("Play Tic Tac Toe against an AI or a friend! Choose your mode and difficulty, then have fun!")
-# ----------------- Mode, Difficulty & First Move ----------------
+st.markdown("Play Tic Tac Toe against an AI or a friend!")
+
+# ---------------- Game Settings ----------------
 mode = st.selectbox("Mode", ["Player vs AI", "Player vs Player"])
 if mode=="Player vs AI":
     st.session_state.difficulty = st.selectbox("Difficulty", ["Easy","Medium","Hard","Impossible"])
@@ -189,7 +197,7 @@ if mode=="Player vs AI":
 else:
     st.session_state.first_move = st.selectbox("Who moves first?", ["Player 1", "Player 2"])
 
-# ----------------- Scoreboard UI ----------------
+# ---------------- Scoreboard ----------------
 score = st.session_state.score
 st.markdown(f"""
 <div class='scoreboard'>
@@ -199,14 +207,14 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ----------------- Set Turn on Reset / Start ----------------
+# ---------------- Set Turn ----------------
 if st.session_state.game_over == False and all(cell==EMPTY for row in st.session_state.board for cell in row):
     if mode == "Player vs AI":
         st.session_state.turn = HUMAN if st.session_state.first_move=="Human" else AI
     else:
         st.session_state.turn = "Player 1" if st.session_state.first_move=="Player 1" else "Player 2"
 
-# ----------------- Board UI ----------------
+# ---------------- Board UI ----------------
 for r in range(3):
     cols = st.columns([1,1,1], gap="small")
     for c in range(3):
@@ -219,31 +227,34 @@ for r in range(3):
             clickable = (not st.session_state.game_over and cell==EMPTY)
 
         with cols[c]:
-            if cell == HUMAN or cell=="X": display_html = "<div class='cell'><span class='xsym'>X</span></div>"
-            elif cell == AI or cell=="O": display_html = "<div class='cell'><span class='osym'>O</span></div>"
-            else: display_html = "<div class='cell'></div>"
+            if cell == HUMAN or cell=="X":
+                display_html = "<div class='cell'><span class='xsym'>X</span></div>"
+            elif cell == AI or cell=="O":
+                display_html = "<div class='cell'><span class='osym'>O</span></div>"
+            else:
+                display_html = "<div class='cell'></div>"
 
             st.markdown(display_html, unsafe_allow_html=True)
 
             if clickable:
-                if st.button(" ", key=f"{r}{c}", help="Make your move"):
+                if st.button(" ", key=f"{r}{c}"):
                     if mode == "Player vs AI":
                         st.session_state.board[r][c] = HUMAN
                         st.session_state.turn = AI
-                    else:  # PvP
+                    else:
                         st.session_state.board[r][c] = "X" if st.session_state.turn=="Player 1" else "O"
                         st.session_state.turn = "Player 2" if st.session_state.turn=="Player 1" else "Player 1"
 
                     w = check_winner(st.session_state.board)
                     if w:
                         st.session_state.game_over = True
-                        # Update score
                         if w=="Tie": st.session_state.score["Tie"] += 1
                         elif w==HUMAN or w=="X": st.session_state.score["Human"] += 1
                         elif w==AI or w=="O": st.session_state.score["AI"] += 1
+
                     st.rerun()
 
-# ----------------- AI MOVE ----------------
+# ---------------- AI MOVE ----------------
 if mode=="Player vs AI" and st.session_state.turn == AI and not st.session_state.game_over:
     time.sleep(0.25)
     r,c = ai_pick_move()
@@ -257,18 +268,21 @@ if mode=="Player vs AI" and st.session_state.turn == AI and not st.session_state
         elif w==AI: st.session_state.score["AI"] += 1
     st.rerun()
 
-# ----------------- Status ----------------
+# ---------------- GAME STATUS ----------------
 winner = check_winner(st.session_state.board)
-if winner == HUMAN or winner=="X": st.success("Player 1 wins!" if mode=="Player vs Player" else "You win!")
-elif winner == AI or winner=="O": st.error("Player 2 wins!" if mode=="Player vs Player" else "AI wins!")
-elif winner == "Tie": st.info("It's a tie!")
+if winner == HUMAN or winner=="X":
+    st.success("Player 1 wins!" if mode=="Player vs Player" else "You win!")
+elif winner == AI or winner=="O":
+    st.error("Player 2 wins!" if mode=="Player vs Player" else "AI wins!")
+elif winner == "Tie":
+    st.info("It's a tie!")
 else:
     if mode=="Player vs AI":
         st.write("Your turn!" if st.session_state.turn==HUMAN else "AI thinking...")
     else:
         st.write(f"{st.session_state.turn}'s turn")
 
-# ----------------- Reset ----------------
+# ---------------- RESET BUTTON ----------------
 st.markdown("<div class='resetbutton'>", unsafe_allow_html=True)
 if st.button("Reset Game"):
     st.session_state.board = [[EMPTY]*3 for _ in range(3)]
@@ -279,7 +293,5 @@ if st.button("Reset Game"):
         st.session_state.turn = "Player 1" if st.session_state.first_move=="Player 1" else "Player 2"
     st.rerun()
 st.markdown("</div>", unsafe_allow_html=True)
-
-
 
 st.markdown("Made by Srinjoy Das")
