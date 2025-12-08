@@ -59,7 +59,7 @@ Make sure Python is installed.
 Run the game using:
 
 ```
-python tictactoe_networked.py
+app.py
 ```
 
 That's it!
