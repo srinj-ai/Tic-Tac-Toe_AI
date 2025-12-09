@@ -297,6 +297,7 @@ if mode=="Player vs AI" and st.session_state.turn == AI and not st.session_state
 winner = check_winner(st.session_state.board)
 if winner == HUMAN or winner=="X":
     st.success("Player 1 wins!" if mode=="Player vs Player" else "You win!")
+    st.balloons()
 elif winner == AI or winner=="O":
     st.error("Player 2 wins!" if mode=="Player vs Player" else "AI wins!")
 elif winner == "Tie":
